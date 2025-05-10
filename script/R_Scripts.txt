@@ -1,0 +1,135 @@
+###### Preping the data ##########
+
+
+df_reads <- read.table("/Users/tusharsingh/Documents/Comp_genomics/Assignment7/vehicle_drug_feature_counts.fpkm.txt",row.names = 1,sep = "",header = T)
+
+df <- read.table("/Users/tusharsingh/Downloads/DE_analysis/vehicle_drug_feature_counts.txt",row.names = 1,sep="\t",header = T)
+df<- df[,6:9]
+
+
+expressed.ids <- apply(df,1,function(x) {any (x>20)})
+dfExp <- df[expressed.ids,]
+
+par(mfrow=c(2,2))
+hist <- apply(dfExp,2,function(x){ hist(log2(x),breaks=100) })
+
+##################### Building DEseqq class ########
+library(DESeq2)
+
+table <- data.frame(name= colnames(dfExp),
+                    condition = c("control","control","treatment","treatment"))
+
+dds <- DESeqDataSetFromMatrix(dfExp,
+                              colData = table,
+                              design=~ condition)
+dds <- DESeq(dds)
+
+normalizedCounts <- counts(dds,normalized = TRUE)
+
+
+res <- results(dds)
+
+
+
+##### checking  metadta ######
+
+def <- mcols(res, use.names=TRUE)
+
+
+##### checking for adjusted p values ######
+
+resSig <- res[which(res$padj < 0.01),]
+
+dim(resSig)
+
+
+
+# downregulated genes in treatment 
+head( resSig[ order( resSig$log2FoldChange ), ] )
+
+
+# upregulated genes in treatment 
+tail( resSig[ order( resSig$log2FoldChange ), ] )
+
+
+
+############ heatmap #############
+
+
+library("RColorBrewer")
+library("gplots")
+
+
+sigNorData <- normalizedCounts[rownames(normalizedCounts) %in% rownames(resSig),]
+
+heatmapcol <- colorRampPalette(brewer.pal(9,"GnBu"))(100)
+
+heatMapDF_nor <- t(apply(sigNorData,1,function(x){(x-mean(x))/sd(x)}))
+
+
+colnames(heatMapDF_nor) <- c('control1','control2',
+                             'treat1'  , 'treat2')
+heatmap.2(heatMapDF_nor, col = heatmapcol,
+          trace="none", 
+          margin=c(10, 10),
+          labRow = F)
+
+
+##### volcano plot #######
+
+res_plot      <- data.frame( res )
+res_plot$col  <- 'gray40'
+
+res_plot$col[res_plot$log2FoldChange > 1 & res_plot$padj < 0.01] <- 'yellow'
+res_plot$col[res_plot$log2FoldChange < -1 & res_plot$padj < 0.01] <- 'orange'
+
+
+par(mar = c(5,5,1,1),mfrow = c(1,1))
+plot(res_plot$log2FoldChange,
+     -log10(res_plot$padj),
+     col = res_plot$col, pch = 19, xlab = 'log2(fold change)',
+     ylab = '-log10(p-adj)', xlim = c(-8,8),
+     
+)
+
+
+######## Go barplot ###########
+
+setwd("/Users/tusharsingh/Downloads/DE_analysis")
+source("source.R")
+
+geneGO <- read.delim2('PlasmoDB-48_Pfalciparum3D7_GO.gaf.txt', header = F, sep = '\t')
+geneGO <- geneGO[, c(2, 5)]
+
+library(GO.db)
+go_db <- Term(GOTERM)
+go_On <- Ontology(GOTERM)
+go_inf <- data.frame(ontology = go_On, term = go_db)
+
+goEnrichment <- go_enrichment(rownames(resSig)[resSig$log2FoldChange > 1],
+                              rownames(df),
+                              geneGO)
+
+idMatch <- match(rownames(goEnrichment), rownames(go_inf))
+goEnrichment <- data.frame(goEnrichment, go_inf[idMatch, ])
+goEnrichment$term[goEnrichment$padj < 0.1]
+
+goSig <- goEnrichment[goEnrichment$padj < 0.01,]
+goSig$expection <- goSig$X.BackgroundWithGOterm/(goSig$X.BackgroundWithGOterm + goSig$X.BackgroundWithoutGOterm) * (goSig$X.QueryWithGOterm + goSig$X.QueryWithoutGOterm)
+
+goSig <- goSig[order(goSig$X.QueryWithGOterm), ]
+goSigDraw <- t(goSig[, c(1, 9)])
+colnames(goSigDraw) <- goSig$term
+
+par(mar = c(4, 15, 1, 1))
+
+colorPalette <- colorRampPalette(brewer.pal(9, "Spectral"))(ncol(goSigDraw))
+
+barplot(goSigDraw, 
+        horiz = TRUE, 
+        las = 1, 
+        col = colorPalette,    
+        border = NA,          
+        cex.names = 0.8,       
+        cex.axis = 0.9,        
+        space = 0.5)          
